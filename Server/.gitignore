@@ -1,0 +1,87 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Virtual environments
+venv/
+env/
+.env
+.venv/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_meta
+
+# Distribution / Packaging
+*.manifest
+*.spec
+MANIFEST
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Docker
+docker-compose.override.yml
+
+# Data files (keep structure, ignore contents)
+data/raw/audio/*
+data/raw/documents/*
+data/raw/firs/*
+data/raw/images/*
+data/raw/judgments/*
+data/processed/*
+data/vectorstore/*
+!data/raw/audio/.gitkeep
+!data/raw/documents/.gitkeep
+!data/raw/firs/.gitkeep
+!data/raw/images/.gitkeep
+!data/raw/judgments/.gitkeep
+!data/processed/.gitkeep
+!data/vectorstore/.gitkeep
+
+# Vector store indexes
+*.faiss
+*.pkl
+
+# Model files
+*.bin
+*.pt
+*.onnx
+models_cache/
+
+# Secrets / Config
+.env.*
+!.env.example
+secrets/
