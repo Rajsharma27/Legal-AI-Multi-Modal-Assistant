@@ -1,10 +1,6 @@
 from langchain_core.prompts import ChatPromptTemplate
 
-# ---------------------------------------------------------------------------
-# 1. Score-based document evaluator
-#    Used with: llm.with_structured_output(DocEvalScore)
-#    Returns:   DocEvalScore(score: float, reason: str)
-# ---------------------------------------------------------------------------
+
 DOC_EVAL_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -22,11 +18,7 @@ DOC_EVAL_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-# ---------------------------------------------------------------------------
-# 2. Sentence-level relevance filter
-#    Used with: llm.with_structured_output(KeepOrDrop)
-#    Returns:   KeepOrDrop(keep: bool)
-# ---------------------------------------------------------------------------
+
 SENTENCE_FILTER_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
@@ -39,18 +31,14 @@ SENTENCE_FILTER_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-# ---------------------------------------------------------------------------
-# 3. Web search query rewriter
-#    Used with: llm.with_structured_output(WebQuery)
-#    Returns:   WebQuery(query: str)
-# ---------------------------------------------------------------------------
+
 QUERY_REWRITE_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
             "Rewrite the user's legal question into a focused web search query.\n"
             "Rules:\n"
-            "  - Keep it short (6–14 words).\n"
+            "  - Keep it short (6-14 words).\n"
             "  - Use Indian legal terminology (IPC, CrPC, case citations, statute names).\n"
             "  - If the question implies recency, add a time constraint like (last 30 days).\n"
             "  - Do NOT answer the question.\n"
@@ -60,10 +48,7 @@ QUERY_REWRITE_PROMPT = ChatPromptTemplate.from_messages(
     ]
 )
 
-# ---------------------------------------------------------------------------
-# 4. Final answer generation
-#    Used with plain StrOutputParser or llm.invoke()
-# ---------------------------------------------------------------------------
+
 ANSWER_PROMPT = ChatPromptTemplate.from_messages(
     [
         (

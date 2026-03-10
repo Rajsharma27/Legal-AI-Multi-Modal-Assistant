@@ -1,9 +1,7 @@
 from __future__ import annotations
-
 import logging
 import re
 from typing import AsyncIterator, List, Optional
-
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -11,7 +9,6 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 from typing_extensions import TypedDict
-
 from app.config import settings
 from app.rag.prompts import (
     ANSWER_PROMPT,
@@ -258,7 +255,7 @@ def _route_after_eval(state: RAGState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Graph construction
+# Graph builiding
 # ---------------------------------------------------------------------------
 
 def _build_graph():
