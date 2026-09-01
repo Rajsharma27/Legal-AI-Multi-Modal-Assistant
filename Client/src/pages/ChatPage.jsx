@@ -1,59 +1,42 @@
-import { useState, useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import ChatInput from '../components/chat/ChatInput';
 import MessageBubble from '../components/chat/MessageBubble';
 import Spinner from '../components/common/Spinner';
-import { queryRAG } from '../services/api';
-
-const WELCOME = {
-  role: 'assistant',
-  content:
-    'Welcome! Ask me any question about Indian law — FIRs, court judgments, IPC/CrPC sections, or your uploaded case documents.',
-  verdict: null,
-  sources: [],
-};
+import { useChat } from '../hooks/useChat';
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState([WELCOME]);
-  const [loading, setLoading] = useState(false);
+  const { messages, loading, sendMessage, clearChat } = useChat();
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSend = async (question, docType) => {
-    setMessages((prev) => [...prev, { role: 'user', content: question }]);
-    setLoading(true);
-    try {
-      const data = await queryRAG(question, docType);
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: data.answer,
-          verdict: data.verdict,
-          reason: data.reason,
-          sources: data.sources,
-        },
-      ]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Sorry, there was an error processing your query. Please check that the server is running.',
-          verdict: null,
-          sources: [],
-        },
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [messages, loading]);
 
   return (
     <div className="d-flex flex-column" style={{ height: '100%' }}>
-      {/* Message area */}
+      {/* Top Header bar with clear button */}
+      <div
+        className="px-4 py-2 d-flex justify-content-between align-items-center"
+        style={{
+          backgroundColor: 'var(--bg-secondary)',
+          borderBottom: '1px solid var(--border-color)',
+        }}
+      >
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+          ⚖️ <span className="fw-semibold" style={{ color: 'var(--text-primary)' }}>Indian Legal Intelligence AI</span> — Self-Corrective RAG (Self-RAG) Active
+        </div>
+        {messages.length > 1 && (
+          <button
+            onClick={clearChat}
+            className="btn btn-sm text-muted"
+            style={{ fontSize: '0.78rem' }}
+          >
+            Clear Chat
+          </button>
+        )}
+      </div>
+
+      {/* Message list area */}
       <div
         className="flex-grow-1 overflow-auto p-4"
         style={{ backgroundColor: 'var(--bg-primary)' }}
@@ -76,7 +59,7 @@ export default function ChatPage() {
             >
               <Spinner size="sm" />
               <span style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-                Searching legal documents…
+                Analyzing legal precedents & statutory context…
               </span>
             </div>
           </div>
@@ -86,7 +69,7 @@ export default function ChatPage() {
       </div>
 
       {/* Input bar */}
-      <ChatInput onSend={handleSend} disabled={loading} />
+      <ChatInput onSend={sendMessage} disabled={loading} />
     </div>
   );
 }

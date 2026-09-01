@@ -8,8 +8,9 @@ from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever, EnsembleRetriever
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStoreRetriever
-from langchain_openai import OpenAIEmbeddings
+
 from app.config import settings
+from app.vectorstore.embeddings import get_embeddings
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +24,7 @@ DocType = Literal["fir", "judgment", "image_ocr", "audio_transcript", "document"
 @lru_cache(maxsize=1)
 def _get_vectorstore() -> Chroma:
     """Return a cached Chroma vectorstore connection."""
-    embeddings = OpenAIEmbeddings(
-        model=settings.EMBEDDING_MODEL,
-        openai_api_key=settings.OPENAI_API_KEY,
-    )
+    embeddings = get_embeddings()
     vectorstore = Chroma(
         collection_name=settings.CHROMA_COLLECTION,
         embedding_function=embeddings,
@@ -68,11 +66,23 @@ def get_hybrid_retriever(
     dense_retriever = vs.as_retriever(search_kwargs={"k": k})
 
     if documents is None:
-        results = vs.get(include=["documents", "metadatas"])
-        documents = [
-            Document(page_content=text, metadata=meta)
-            for text, meta in zip(results["documents"], results["metadatas"])
-        ]
+        try:
+            results = vs.get(include=["documents", "metadatas"])
+            if results and results.get("documents"):
+                documents = [
+                    Document(page_content=text, metadata=meta or {})
+                    for text, meta in zip(results["documents"], results["metadatas"])
+                ]
+            else:
+                documents = []
+        except Exception as e:
+            logger.warning("Failed to fetch documents from Chroma for BM25: %s", e)
+            documents = []
+
+    if not documents:
+        # Fallback to pure dense retriever if vector store is empty or has no docs
+        logger.info("No documents found for BM25 indexing. Falling back to dense retriever.")
+        return dense_retriever
 
     bm25_retriever = BM25Retriever.from_documents(documents, k=k)
 
@@ -114,6 +124,11 @@ def retrieve_documents(
     else:
         retriever = get_retriever(k=k)
 
-    docs = retriever.invoke(query)
+    try:
+        docs = retriever.invoke(query)
+    except Exception as e:
+        logger.warning("Retrieval failed (%s). Returning empty list.", e)
+        docs = []
+
     logger.debug("Retrieved %d chunks for query: %.80s", len(docs), query)
     return docs

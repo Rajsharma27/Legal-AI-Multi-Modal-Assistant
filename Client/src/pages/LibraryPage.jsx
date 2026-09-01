@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Spinner from '../components/common/Spinner';
-import { fetchDocuments } from '../services/api';
+import { fetchDocuments, deleteDocument } from '../services/api';
 
 const DOC_FILTERS = ['All', 'fir', 'judgment', 'image_ocr', 'audio_transcript'];
 
@@ -18,6 +18,7 @@ export default function LibraryPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     fetchDocuments()
@@ -26,10 +27,25 @@ export default function LibraryPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  const handleDelete = async (docId) => {
+    if (!window.confirm('Are you sure you want to delete this document and its vector embeddings?')) {
+      return;
+    }
+    setDeletingId(docId);
+    try {
+      await deleteDocument(docId);
+      setDocs((prev) => prev.filter((d) => d.id !== docId));
+    } catch (err) {
+      alert('Failed to delete document: ' + err.message);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const filtered = docs.filter(
     (d) =>
       (filter === 'All' || d.doc_type === filter) &&
-      (d.source || '').toLowerCase().includes(search.toLowerCase())
+      (d.file_name || d.file_path || '').toLowerCase().includes(search.toLowerCase())
   );
 
   return (
@@ -89,8 +105,8 @@ export default function LibraryPage() {
         </div>
       ) : (
         <div className="row g-3">
-          {filtered.map((doc, i) => (
-            <div key={i} className="col-sm-6 col-md-4 col-lg-3">
+          {filtered.map((doc) => (
+            <div key={doc.id || doc.file_path} className="col-sm-6 col-md-4 col-lg-3">
               <div
                 className="rounded-3 p-3 h-100 d-flex flex-column"
                 style={{
@@ -106,12 +122,12 @@ export default function LibraryPage() {
                 <div
                   className="fw-semibold mb-1 text-truncate"
                   style={{ color: 'var(--text-primary)', fontSize: '0.88rem' }}
-                  title={doc.source}
+                  title={doc.file_name || doc.file_path}
                 >
-                  {(doc.source || '').split('/').pop() || doc.source || 'Unnamed'}
+                  {doc.file_name || (doc.file_path || '').split('/').pop() || 'Unnamed'}
                 </div>
 
-                <div className="mb-2">
+                <div className="mb-2 d-flex align-items-center gap-2">
                   <span
                     className="badge rounded-pill px-2 py-1"
                     style={{
@@ -123,6 +139,11 @@ export default function LibraryPage() {
                   >
                     {(doc.doc_type || 'document').replace(/_/g, ' ')}
                   </span>
+                  {doc.chunk_count > 0 && (
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      {doc.chunk_count} chunks
+                    </span>
+                  )}
                 </div>
 
                 <small style={{ color: 'var(--text-muted)' }}>
@@ -137,18 +158,9 @@ export default function LibraryPage() {
 
                 <div className="mt-auto pt-3 d-flex gap-2">
                   <button
-                    className="btn btn-sm flex-grow-1"
-                    style={{
-                      backgroundColor: 'var(--bg-primary)',
-                      color: 'var(--text-muted)',
-                      border: '1px solid var(--border-color)',
-                      fontSize: '0.78rem',
-                    }}
-                  >
-                    View
-                  </button>
-                  <button
-                    className="btn btn-sm"
+                    onClick={() => handleDelete(doc.id)}
+                    disabled={deletingId === doc.id}
+                    className="btn btn-sm w-100"
                     style={{
                       backgroundColor: 'rgba(220,38,38,0.1)',
                       color: '#dc2626',
@@ -156,7 +168,7 @@ export default function LibraryPage() {
                       fontSize: '0.78rem',
                     }}
                   >
-                    🗑
+                    {deletingId === doc.id ? 'Deleting...' : '🗑 Delete'}
                   </button>
                 </div>
               </div>

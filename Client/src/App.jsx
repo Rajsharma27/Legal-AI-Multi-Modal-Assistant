@@ -1,11 +1,12 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import 'bootstrap/dist/css/bootstrap.min.css'
-import './App.css'
-import Navbar from './components/layout/Navbar'
-import Sidebar from './components/layout/Sidebar'
-import ChatPage from './pages/ChatPage'
-import UploadPage from './pages/UploadPage'
-import LibraryPage from './pages/LibraryPage'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import 'bootstrap/dist/css/bootstrap.min.css';
+import './App.css';
+import Navbar from './components/layout/Navbar';
+import Sidebar from './components/layout/Sidebar';
+import ChatPage from './pages/ChatPage';
+import UploadPage from './pages/UploadPage';
+import LibraryPage from './pages/LibraryPage';
+import HistoryPage from './pages/HistoryPage';
 
 export default function App() {
   return (
@@ -20,10 +21,11 @@ export default function App() {
               <Route path="/chat" element={<ChatPage />} />
               <Route path="/upload" element={<UploadPage />} />
               <Route path="/library" element={<LibraryPage />} />
+              <Route path="/history" element={<HistoryPage />} />
             </Routes>
           </main>
         </div>
       </div>
     </BrowserRouter>
-  )
+  );
 }

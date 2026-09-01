@@ -1,15 +1,16 @@
 from __future__ import annotations
+
 import logging
 import re
 from typing import AsyncIterator, List, Optional
-from langchain_community.tools.tavily_search import TavilySearchResults
-from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_openai import ChatOpenAI
-from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 from typing_extensions import TypedDict
+
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+
 from app.config import settings
+from app.llm.client import get_llm
 from app.rag.prompts import (
     ANSWER_PROMPT,
     DOC_EVAL_PROMPT,
@@ -17,10 +18,11 @@ from app.rag.prompts import (
     SENTENCE_FILTER_PROMPT,
 )
 from app.rag.retriever import DocType, retrieve_documents
+from langgraph.graph import END, START, StateGraph
 
 logger = logging.getLogger(__name__)
 
-# Score thresholds (same values as the reference notebooks)
+# Score thresholds
 UPPER_TH = 0.7
 LOWER_TH = 0.3
 
@@ -43,7 +45,7 @@ class WebQuery(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# State
+# State Definition
 # ---------------------------------------------------------------------------
 
 class RAGState(TypedDict):
@@ -71,19 +73,7 @@ class RAGState(TypedDict):
 
 
 # ---------------------------------------------------------------------------
-# LLM factory
-# ---------------------------------------------------------------------------
-
-def _llm(temperature: float = 0.0) -> ChatOpenAI:
-    return ChatOpenAI(
-        model=settings.LLM_MODEL,
-        temperature=temperature,
-        openai_api_key=settings.OPENAI_API_KEY,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Sentence-level helpers (from notebook 2 / 6)
+# Sentence-level helpers
 # ---------------------------------------------------------------------------
 
 def _decompose_to_sentences(text: str) -> List[str]:
@@ -112,29 +102,33 @@ def retrieve_node(state: RAGState) -> RAGState:
 
 # --- 2. eval_each_doc -------------------------------------------------------
 
-_doc_eval_chain = DOC_EVAL_PROMPT | _llm().with_structured_output(DocEvalScore)
-
-
 def eval_each_doc_node(state: RAGState) -> RAGState:
-    """Score every retrieved chunk; classify retrieval as CORRECT/INCORRECT/AMBIGUOUS.
-
-    Mirrors the exact logic from notebook 3 / 6:
-      CORRECT   → at least one chunk scores > UPPER_TH
-      INCORRECT → all chunks score  < LOWER_TH
-      AMBIGUOUS → anything in between
-    """
+    """Score every retrieved chunk; classify retrieval as CORRECT/INCORRECT/AMBIGUOUS."""
     q = state["question"]
+    docs = state.get("docs", [])
+
+    if not docs:
+        logger.info("[RAG:eval] No documents retrieved. Verdict = INCORRECT.")
+        return {"good_docs": [], "verdict": "INCORRECT", "reason": "No relevant documents found in knowledge base."}
+
     scores: List[float] = []
     good: List[Document] = []
 
-    for doc in state["docs"]:
-        out: DocEvalScore = _doc_eval_chain.invoke(
-            {"question": q, "chunk": doc.page_content}
-        )
-        logger.debug("[RAG:eval] score=%.2f  reason=%s", out.score, out.reason)
-        scores.append(out.score)
-        if out.score > LOWER_TH:
-            good.append(doc)
+    try:
+        doc_eval_chain = DOC_EVAL_PROMPT | get_llm().with_structured_output(DocEvalScore)
+
+        for doc in docs:
+            out: DocEvalScore = doc_eval_chain.invoke(
+                {"question": q, "chunk": doc.page_content}
+            )
+            logger.debug("[RAG:eval] score=%.2f  reason=%s", out.score, out.reason)
+            scores.append(out.score)
+            if out.score > LOWER_TH:
+                good.append(doc)
+    except Exception as e:
+        logger.warning("[RAG:eval] Evaluation chain failed (%s). Defaulting to passing all retrieved docs.", e)
+        good = docs
+        scores = [0.8] * len(docs)
 
     if any(s > UPPER_TH for s in scores):
         verdict, reason = "CORRECT", f"At least one chunk scored > {UPPER_TH}."
@@ -152,36 +146,48 @@ def eval_each_doc_node(state: RAGState) -> RAGState:
 
 # --- 3. rewrite_query -------------------------------------------------------
 
-_rewrite_chain = QUERY_REWRITE_PROMPT | _llm().with_structured_output(WebQuery)
-
-
 def rewrite_query_node(state: RAGState) -> RAGState:
     """Rewrite the user's legal question into a focused web-search query."""
-    out: WebQuery = _rewrite_chain.invoke({"question": state["question"]})
-    logger.info("[RAG:rewrite] web_query=%.120s", out.query)
-    return {"web_query": out.query}
+    q = state["question"]
+    try:
+        rewrite_chain = QUERY_REWRITE_PROMPT | get_llm().with_structured_output(WebQuery)
+        out: WebQuery = rewrite_chain.invoke({"question": q})
+        web_query = out.query
+    except Exception as e:
+        logger.warning("[RAG:rewrite] Query rewrite failed (%s). Using original question.", e)
+        web_query = q
+
+    logger.info("[RAG:rewrite] web_query=%.120s", web_query)
+    return {"web_query": web_query}
 
 
 # --- 4. web_search ----------------------------------------------------------
-
-_tavily = TavilySearchResults(max_results=5, tavily_api_key=settings.TAVILY_API_KEY)
-
 
 def web_search_node(state: RAGState) -> RAGState:
     """Run Tavily web search using the rewritten query (fallback to original)."""
     q = state.get("web_query") or state["question"]
     logger.info("[RAG:web_search] query=%.80s", q)
-    results = _tavily.invoke({"query": q})
-
     web_docs: List[Document] = []
-    for r in results or []:
-        title = r.get("title", "")
-        url = r.get("url", "")
-        content = r.get("content", "") or r.get("snippet", "")
-        text = f"TITLE: {title}\nURL: {url}\nCONTENT:\n{content}"
-        web_docs.append(
-            Document(page_content=text, metadata={"source": url, "doc_type": "web", "title": title})
-        )
+
+    if settings.TAVILY_API_KEY:
+        try:
+            from langchain_community.tools.tavily_search import TavilySearchResults
+
+            tavily = TavilySearchResults(max_results=5, tavily_api_key=settings.TAVILY_API_KEY)
+            results = tavily.invoke({"query": q})
+
+            for r in results or []:
+                title = r.get("title", "")
+                url = r.get("url", "")
+                content = r.get("content", "") or r.get("snippet", "")
+                text = f"TITLE: {title}\nURL: {url}\nCONTENT:\n{content}"
+                web_docs.append(
+                    Document(page_content=text, metadata={"source": url, "doc_type": "web", "title": title})
+                )
+        except Exception as e:
+            logger.warning("[RAG:web_search] Web search failed: %s", e)
+    else:
+        logger.info("[RAG:web_search] TAVILY_API_KEY not configured. Skipping live web search.")
 
     logger.info("[RAG:web_search] fetched %d results", len(web_docs))
     return {"web_docs": web_docs}
@@ -189,17 +195,8 @@ def web_search_node(state: RAGState) -> RAGState:
 
 # --- 5. refine --------------------------------------------------------------
 
-_filter_chain = SENTENCE_FILTER_PROMPT | _llm().with_structured_output(KeepOrDrop)
-
-
 def refine_node(state: RAGState) -> RAGState:
-    """Sentence-level refinement (decompose → LLM filter → recompose).
-
-    Context source depends on verdict (mirrors notebook 6):
-      CORRECT   → good_docs only
-      INCORRECT → web_docs only
-      AMBIGUOUS → good_docs + web_docs  (best of both)
-    """
+    """Sentence-level refinement (decompose → LLM filter → recompose)."""
     q = state["question"]
     verdict = state.get("verdict", "CORRECT")
 
@@ -211,15 +208,23 @@ def refine_node(state: RAGState) -> RAGState:
         docs_to_use = state.get("good_docs", []) + state.get("web_docs", [])
 
     raw_context = "\n\n".join(d.page_content for d in docs_to_use).strip()
+    if not raw_context:
+        return {"strips": [], "kept_strips": [], "refined_context": ""}
+
     strips = _decompose_to_sentences(raw_context)
-
     kept: List[str] = []
-    for sentence in strips:
-        result: KeepOrDrop = _filter_chain.invoke({"question": q, "sentence": sentence})
-        if result.keep:
-            kept.append(sentence)
 
-    refined_context = "\n".join(kept).strip()
+    try:
+        filter_chain = SENTENCE_FILTER_PROMPT | get_llm().with_structured_output(KeepOrDrop)
+        for sentence in strips:
+            result: KeepOrDrop = filter_chain.invoke({"question": q, "sentence": sentence})
+            if result.keep:
+                kept.append(sentence)
+    except Exception as e:
+        logger.warning("[RAG:refine] Sentence filtering failed (%s). Keeping raw context.", e)
+        kept = strips
+
+    refined_context = "\n".join(kept).strip() if kept else raw_context
     logger.info(
         "[RAG:refine] strips=%d  kept=%d  verdict=%s", len(strips), len(kept), verdict
     )
@@ -228,23 +233,26 @@ def refine_node(state: RAGState) -> RAGState:
 
 # --- 6. generate ------------------------------------------------------------
 
-_answer_chain = ANSWER_PROMPT | _llm(temperature=0.2) | StrOutputParser()
-
-
 def generate_node(state: RAGState) -> RAGState:
     """Generate the final answer from the refined legal context."""
     logger.info("[RAG:generate] refined_context length=%d", len(state.get("refined_context", "")))
-    answer = _answer_chain.invoke(
-        {
-            "question": state["question"],
-            "refined_context": state.get("refined_context", ""),
-        }
-    )
+    try:
+        answer_chain = ANSWER_PROMPT | get_llm(temperature=0.2) | StrOutputParser()
+        answer = answer_chain.invoke(
+            {
+                "question": state["question"],
+                "refined_context": state.get("refined_context", ""),
+            }
+        )
+    except Exception as e:
+        logger.error("[RAG:generate] Generation failed: %s", e)
+        answer = f"I could not process your legal query due to a system error: {str(e)}"
+
     return {"answer": answer}
 
 
 # ---------------------------------------------------------------------------
-# Routing  (mirrors notebook 6)
+# Routing
 # ---------------------------------------------------------------------------
 
 def _route_after_eval(state: RAGState) -> str:
@@ -255,7 +263,7 @@ def _route_after_eval(state: RAGState) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Graph builiding
+# Graph building
 # ---------------------------------------------------------------------------
 
 def _build_graph():
@@ -277,18 +285,14 @@ def _build_graph():
         {"refine": "refine", "rewrite_query": "rewrite_query"},
     )
 
-    # INCORRECT / AMBIGUOUS path: rewrite → web_search → refine → generate
     g.add_edge("rewrite_query", "web_search")
     g.add_edge("web_search", "refine")
-
-    # Both paths converge at refine → generate → END
     g.add_edge("refine", "generate")
     g.add_edge("generate", END)
 
     return g.compile()
 
 
-# Lazy singleton
 _graph = None
 
 
@@ -300,11 +304,10 @@ def _get_graph():
 
 
 # ---------------------------------------------------------------------------
-# Output formatter
+# Output Formatter & Public API
 # ---------------------------------------------------------------------------
 
 def _format_output(state: RAGState) -> dict:
-    # Collect unique sources from whichever docs were used
     all_docs = state.get("good_docs", []) + state.get("web_docs", [])
     seen: set[str] = set()
     sources: List[dict] = []
@@ -347,33 +350,12 @@ def _initial_state(
     }
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 def run(
     question: str,
     doc_type: Optional[DocType] = None,
     use_hybrid: bool = True,
 ) -> dict:
-    """Run the self-corrective RAG pipeline synchronously.
-
-    Args:
-        question:   The user's legal question.
-        doc_type:   Restrict retrieval to a specific document type
-                    ("fir", "judgment", "image_ocr", "audio_transcript").
-        use_hybrid: Use hybrid (dense + BM25) retrieval when doc_type is not set.
-
-    Returns:
-        {
-            "answer":       str,
-            "sources":      list[{"source": str, "doc_type": str}],
-            "question":     str,
-            "verdict":      "CORRECT" | "INCORRECT" | "AMBIGUOUS",
-            "reason":       str,
-            "kept_strips":  list[str],
-        }
-    """
+    """Run the self-corrective RAG pipeline synchronously."""
     state = _get_graph().invoke(_initial_state(question, doc_type, use_hybrid))
     return _format_output(state)
 
@@ -383,7 +365,7 @@ async def arun(
     doc_type: Optional[DocType] = None,
     use_hybrid: bool = True,
 ) -> dict:
-    """Async version of :func:`run`."""
+    """Async version of run."""
     state = await _get_graph().ainvoke(_initial_state(question, doc_type, use_hybrid))
     return _format_output(state)
 
@@ -393,10 +375,7 @@ async def astream(
     doc_type: Optional[DocType] = None,
     use_hybrid: bool = True,
 ) -> AsyncIterator[str]:
-    """Stream answer tokens from the generate node (for Server-Sent Events).
-
-    Yields raw text chunks as they are produced by the LLM.
-    """
+    """Stream answer tokens from the generate node."""
     async for event in _get_graph().astream_events(
         _initial_state(question, doc_type, use_hybrid),
         version="v2",
